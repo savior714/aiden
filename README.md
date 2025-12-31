@@ -1,36 +1,78 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AIDEN (Project Juwon)
 
-## Getting Started
+아들 주원이를 위한 **광고 없는 청정 학습/게임 앱**
 
-First, run the development server:
+## 🎮 게임 목록
+
+| 게임 | 설명 | 기술 |
+|------|------|------|
+| 🧮 **Math Test** | 사칙연산 퀴즈 | React, 난이도별 문제 생성 |
+| ❓ **Missing** | 빈칸 채우기 (역연산) | React, 랜덤 빈칸 위치 |
+| 🧩 **Combo** | 숫자 조합 퍼즐 | React, 다중 선택 |
+| 🗺️ **Maze** | 미로 찾기 | HTML5 Canvas, DFS 알고리즘 |
+| 🍒 **Merge Fruit** | 과일 합치기 | Matter.js 물리엔진 |
+
+## 🛠️ 기술 스택
+
+- **Framework**: Next.js 14 (App Router, Static Export)
+- **Mobile**: Capacitor 6.0 (Android WebView)
+- **UI**: TypeScript, Tailwind CSS, Shadcn/UI, Lucide React
+- **Physics**: Matter.js (Merge Fruit)
+- **State**: Zustand (점수 및 설정 관리)
+- **Effects**: canvas-confetti, Howler.js
+
+## 📦 설치 및 실행
 
 ```bash
+# 의존성 설치
+npm install
+
+# 개발 서버 실행
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+
+# 웹 빌드
+npm run build
+
+# Android APK 빌드
+npm run build
+npx cap sync android
+npx cap open android
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 📱 Android 설정
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- **가로 모드 고정**: `AndroidManifest.xml`에서 `screenOrientation="landscape"` 설정
+- **뒤로가기 핸들링**: Capacitor App 플러그인으로 메인 메뉴 복귀
+- **오프라인 우선**: 모든 리소스 로컬 포함
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 🎯 주요 기능
 
-## Learn More
+- ✅ 광고 없는 청정 환경
+- ✅ 오프라인 동작
+- ✅ 난이도 조절 (쉬움/보통/어려움)
+- ✅ 점수 및 설정 영구 저장 (localStorage)
+- ✅ 터치 최적화 (태블릿 친화적)
+- ✅ 성공 시 축하 효과 (confetti)
 
-To learn more about Next.js, take a look at the following resources:
+## 📂 프로젝트 구조
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```
+aiden/
+├── src/
+│   ├── app/                    # Next.js 페이지
+│   │   ├── page.tsx           # 메인 로비
+│   │   └── games/             # 게임별 라우트
+│   ├── components/
+│   │   ├── GameShell.tsx      # 공통 게임 쉘
+│   │   └── games/             # 게임별 컴포넌트
+│   └── lib/
+│       ├── store.ts           # Zustand 스토어
+│       └── sounds.ts          # 사운드 관리
+├── android/                    # Capacitor Android
+├── next.config.mjs            # Static Export 설정
+└── capacitor.config.ts        # Capacitor 설정
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 📝 라이선스
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+개인 프로젝트 (주원이 전용)
