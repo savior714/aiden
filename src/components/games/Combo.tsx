@@ -4,60 +4,55 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import confetti from 'canvas-confetti';
 import GameShell from '@/components/GameShell';
-import { Button } from '@/components/ui/button';
 import { useGameStore } from '@/lib/store';
 import { playSound } from '@/lib/sounds';
 import { App } from '@capacitor/app';
 
-interface Problem {
-    numbers: number[];
-    target: number;
-    selected: number[];
-}
-
-function generateProblem(difficulty: 'easy' | 'normal' | 'hard'): Problem {
-    const count = difficulty === 'easy' ? 4 : difficulty === 'normal' ? 5 : 6;
-    const maxNum = difficulty === 'easy' ? 10 : difficulty === 'normal' ? 15 : 20;
-
-    // 먼저 조합 가능한 숫자들 생성
-    const numbers: number[] = [];
-    for (let i = 0; i < count; i++) {
-        numbers.push(Math.floor(Math.random() * maxNum) + 1);
-    }
-
-    // 목표 숫자 = 랜덤으로 선택된 숫자들의 합
-    const selectCount = Math.min(2 + Math.floor(Math.random() * 2), numbers.length);
-    const shuffled = [...numbers].sort(() => Math.random() - 0.5);
-    const target = shuffled.slice(0, selectCount).reduce((a, b) => a + b, 0);
-
-    return {
-        numbers: numbers.sort(() => Math.random() - 0.5),
-        target,
-        selected: [],
-    };
+interface Block {
+    id: string; // 고유 ID (애니메이션용)
+    value: number;
+    isRemoving?: boolean;
 }
 
 export default function Combo() {
     const router = useRouter();
     const { settings, updateHighScore, addGameResult, highScores } = useGameStore();
 
-    const [problem, setProblem] = useState<Problem | null>(null);
-    const [selected, setSelected] = useState<number[]>([]);
+    // Game Configuration
+    const GRID_SIZE = 8; // 8x8 Grid
+    const TARGET_SUM = settings.difficulty === 'hard' ? 20 : 10;
+
+    // Game State
+    const [grid, setGrid] = useState<Block[]>([]);
+    const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
     const [score, setScore] = useState(0);
-    const [round, setRound] = useState(1);
+    const [comboChain, setComboChain] = useState(0);
+    const [isProcessing, setIsProcessing] = useState(false); // 애니메이션 중 입력 차단
     const [gameOver, setGameOver] = useState(false);
-    const [feedback, setFeedback] = useState<'correct' | 'wrong' | null>(null);
 
-    const TOTAL_ROUNDS = 8;
+    // 랜덤 블록 생성
+    const generateBlock = useCallback((): Block => {
+        const maxNum = settings.difficulty === 'hard' ? 15 : 9;
+        // 1부터 maxNum까지 랜덤 (단, TARGET_SUM보다 큰 수는 나오지 않게)
+        const val = Math.floor(Math.random() * Math.min(maxNum, TARGET_SUM - 1)) + 1;
+        return {
+            id: Math.random().toString(36).substr(2, 9),
+            value: val,
+        };
+    }, [settings.difficulty, TARGET_SUM]);
 
-    const nextProblem = useCallback(() => {
-        setProblem(generateProblem(settings.difficulty));
-        setSelected([]);
-        setFeedback(null);
-    }, [settings.difficulty]);
+    // 초기 그리드 생성
+    const initializeGrid = useCallback(() => {
+        const newGrid = Array.from({ length: GRID_SIZE * GRID_SIZE }, () => generateBlock());
+        setGrid(newGrid);
+        setSelectedIndices([]);
+        setScore(0);
+        setComboChain(0);
+        setGameOver(false);
+    }, [generateBlock, GRID_SIZE]);
 
     useEffect(() => {
-        nextProblem();
+        initializeGrid();
 
         const setupBackButton = async () => {
             try {
@@ -73,73 +68,127 @@ export default function Combo() {
         return () => {
             App.removeAllListeners().catch(() => { });
         };
-    }, [nextProblem, router]);
+    }, [initializeGrid, router]);
 
-    const toggleNumber = (index: number) => {
-        if (feedback) return;
+    // 블록 선택 핸들러
+    const handleBlockClick = (index: number) => {
+        if (isProcessing || gameOver) return;
 
-        setSelected((prev) => {
-            if (prev.includes(index)) {
-                return prev.filter((i) => i !== index);
-            }
-            return [...prev, index];
-        });
-        playSound('click', settings.soundEnabled);
-    };
-
-    const checkAnswer = () => {
-        if (!problem || selected.length === 0 || feedback) return;
-
-        const sum = selected.reduce((acc, idx) => acc + problem.numbers[idx], 0);
-        const isCorrect = sum === problem.target;
-
-        if (isCorrect) {
-            playSound('correct', settings.soundEnabled);
-            setScore((prev) => prev + 10 + selected.length * 2);
-            setFeedback('correct');
-        } else {
-            playSound('wrong', settings.soundEnabled);
-            setFeedback('wrong');
+        if (selectedIndices.includes(index)) {
+            // 이미 선택된 블록 클릭 시 선택 해제
+            setSelectedIndices(prev => prev.filter(i => i !== index));
+            return;
         }
 
-        setTimeout(() => {
-            if (round >= TOTAL_ROUNDS) {
-                const finalScore = isCorrect ? score + 10 + selected.length * 2 : score;
-                updateHighScore('combo', finalScore);
-                addGameResult({
-                    gameId: 'combo',
-                    score: finalScore,
-                    playedAt: new Date().toISOString(),
-                });
+        const newSelection = [...selectedIndices, index];
+        const currentSum = newSelection.reduce((sum, idx) => sum + grid[idx].value, 0);
 
-                if (finalScore > highScores.combo) {
-                    confetti({
-                        particleCount: 100,
-                        spread: 70,
-                        origin: { y: 0.6 },
-                    });
+        if (currentSum === TARGET_SUM) {
+            // 1. 정답! (합이 일치)
+            handleMatch(newSelection);
+        } else if (currentSum > TARGET_SUM) {
+            // 2. 초과! (실패)
+            playSound('wrong', settings.soundEnabled);
+            setSelectedIndices([]);
+            setComboChain(0); // 콤보 초기화
+        } else {
+            // 3. 아직 부족함 (계속 선택)
+            setSelectedIndices(newSelection);
+            playSound('click', settings.soundEnabled);
+        }
+    };
+
+    // 매칭 성공 처리 (블록 삭제 및 채우기)
+    const handleMatch = async (indicesToRemove: number[]) => {
+        setIsProcessing(true);
+        playSound('correct', settings.soundEnabled);
+
+        // 콤보 보너스 계산
+        const basePoints = indicesToRemove.length * 10;
+        const comboBonus = comboChain * 5;
+        const points = basePoints + comboBonus;
+        setScore(s => s + points);
+        setComboChain(c => c + 1);
+
+        // 성공 이펙트
+        if (comboChain >= 2) {
+            confetti({
+                particleCount: 50,
+                spread: 40,
+                origin: { y: 0.5 },
+                colors: ['#FCD34D', '#F87171']
+            });
+        }
+
+        // 1. 삭제 애니메이션 표시 (잠깐 대기)
+        const newGrid = [...grid];
+        indicesToRemove.forEach(idx => {
+            newGrid[idx] = { ...newGrid[idx], isRemoving: true };
+        });
+        setGrid(newGrid);
+        setSelectedIndices([]); // 선택 해제
+
+        await new Promise(resolve => setTimeout(resolve, 300)); // 0.3초 대기
+
+        // 2. 물리적 제거 및 중력 적용 (Gravity Logic)
+        // 열(Column) 단위로 처리
+        const finalGrid = new Array(GRID_SIZE * GRID_SIZE).fill(null);
+
+        for (let col = 0; col < GRID_SIZE; col++) {
+            // 현재 열에서 삭제되지 않은 블록들만 추출
+            const remainingBlocks = [];
+            for (let row = 0; row < GRID_SIZE; row++) {
+                const index = row * GRID_SIZE + col;
+                if (!indicesToRemove.includes(index)) {
+                    remainingBlocks.push(grid[index]);
                 }
-                playSound('success', settings.soundEnabled);
-                setGameOver(true);
-            } else {
-                setRound((prev) => prev + 1);
-                nextProblem();
             }
-        }, 800);
+
+            // 위쪽 빈 공간만큼 새 블록 생성하여 채우기
+            const needed = GRID_SIZE - remainingBlocks.length;
+            const newBlocks = Array.from({ length: needed }, () => generateBlock());
+
+            // [새 블록들, ...기존 블록들] 순서로 합쳐서 해당 열에 배치
+            const mergedColumn = [...newBlocks, ...remainingBlocks];
+
+            for (let row = 0; row < GRID_SIZE; row++) {
+                finalGrid[row * GRID_SIZE + col] = mergedColumn[row];
+            }
+        }
+
+        setGrid(finalGrid);
+        setIsProcessing(false);
+
+        // 최고 점수 갱신 체크
+        if (score + points > highScores.combo) {
+            updateHighScore('combo', score + points);
+        }
     };
 
     const handleRestart = () => {
-        setScore(0);
-        setRound(1);
-        setGameOver(false);
-        nextProblem();
+        initializeGrid();
     };
 
-    const currentSum = problem
-        ? selected.reduce((acc, idx) => acc + problem.numbers[idx], 0)
-        : 0;
+    const handleGameOver = () => {
+        setGameOver(true);
+        addGameResult({
+            gameId: 'combo',
+            score,
+            playedAt: new Date().toISOString(),
+        });
 
-    if (!problem) return null;
+        if (score > highScores.combo) {
+            confetti({
+                particleCount: 100,
+                spread: 70,
+                origin: { y: 0.6 },
+            });
+        }
+        playSound('success', settings.soundEnabled);
+    };
+
+    // 현재 선택된 합계 계산
+    const currentSum = selectedIndices.reduce((sum, idx) => sum + (grid[idx]?.value || 0), 0);
 
     return (
         <GameShell
@@ -148,65 +197,74 @@ export default function Combo() {
             onRestart={handleRestart}
             gameOver={gameOver}
             gameOverTitle="게임 종료!"
-            gameOverMessage={`${TOTAL_ROUNDS}라운드 완료!`}
+            gameOverMessage={`최종 점수: ${score}점!`}
             onGameOverClose={() => setGameOver(false)}
         >
-            <div className="flex w-full max-w-lg flex-col items-center gap-6">
-                {/* 라운드 & 목표 */}
+            <div className="flex w-full max-w-2xl flex-col items-center gap-4">
+                {/* 상태 표시 */}
                 <div className="flex w-full items-center justify-between text-white">
-                    <span className="text-lg">라운드 {round} / {TOTAL_ROUNDS}</span>
-                </div>
+                    <div className="flex items-center gap-2 rounded-full bg-yellow-400 px-4 py-2">
+                        <span className="text-sm font-medium text-yellow-800">목표:</span>
+                        <span className="text-xl font-bold text-yellow-900">{TARGET_SUM}</span>
+                    </div>
 
-                {/* 목표 숫자 */}
-                <div className="rounded-2xl bg-yellow-400 px-8 py-4 shadow-lg">
-                    <span className="text-lg text-yellow-800">목표: </span>
-                    <span className="text-4xl font-bold text-yellow-900">{problem.target}</span>
-                </div>
+                    <div className={`rounded-full px-4 py-2 text-sm font-bold transition-all ${currentSum === TARGET_SUM ? 'bg-green-400 text-green-900 scale-110' :
+                            currentSum > TARGET_SUM ? 'bg-red-400 text-red-900' :
+                                'bg-white/80 text-gray-800'
+                        }`}>
+                        현재: {currentSum}
+                    </div>
 
-                {/* 현재 합계 */}
-                <div className={`rounded-full px-6 py-2 text-xl font-bold ${currentSum === problem.target ? 'bg-green-400 text-green-900' :
-                        currentSum > problem.target ? 'bg-red-400 text-red-900' :
-                            'bg-white/80 text-gray-800'
-                    }`}>
-                    현재 합: {currentSum}
-                </div>
-
-                {/* 숫자 버튼들 */}
-                <div className={`relative w-full rounded-3xl bg-white p-6 shadow-2xl transition-all ${feedback === 'correct' ? 'ring-4 ring-green-400' :
-                        feedback === 'wrong' ? 'ring-4 ring-red-400' : ''
-                    }`}>
-                    {feedback && (
-                        <div className={`absolute inset-0 flex items-center justify-center rounded-3xl text-6xl ${feedback === 'correct' ? 'bg-green-400/20' : 'bg-red-400/20'
-                            }`}>
-                            {feedback === 'correct' ? '⭕' : '❌'}
+                    {comboChain > 0 && (
+                        <div className="rounded-full bg-orange-500 px-4 py-2 text-sm font-bold text-white animate-pulse">
+                            🔥 콤보 x{comboChain}
                         </div>
                     )}
-
-                    <div className="flex flex-wrap justify-center gap-3">
-                        {problem.numbers.map((num, index) => (
-                            <Button
-                                key={index}
-                                onClick={() => toggleNumber(index)}
-                                disabled={feedback !== null}
-                                className={`h-16 w-16 rounded-2xl text-2xl font-bold shadow-lg transition-all ${selected.includes(index)
-                                        ? 'bg-purple-500 text-white scale-110'
-                                        : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
-                                    }`}
-                            >
-                                {num}
-                            </Button>
-                        ))}
-                    </div>
                 </div>
 
-                {/* 확인 버튼 */}
-                <Button
-                    onClick={checkAnswer}
-                    disabled={selected.length === 0 || feedback !== null}
-                    className="h-16 w-full rounded-2xl bg-gradient-to-r from-green-400 to-emerald-500 text-2xl font-bold text-white shadow-lg hover:from-green-500 hover:to-emerald-600"
+                {/* 8x8 그리드 */}
+                <div
+                    className="grid w-full gap-1 rounded-2xl bg-purple-900/30 p-2 shadow-2xl backdrop-blur-sm"
+                    style={{ gridTemplateColumns: `repeat(${GRID_SIZE}, 1fr)` }}
                 >
-                    확인! ✓
-                </Button>
+                    {grid.map((block, index) => {
+                        const isSelected = selectedIndices.includes(index);
+
+                        return (
+                            <button
+                                key={`${block.id}-${index}`}
+                                onClick={() => handleBlockClick(index)}
+                                disabled={isProcessing || gameOver}
+                                className={`
+                  relative flex aspect-square items-center justify-center rounded-lg 
+                  text-lg font-bold shadow-sm transition-all duration-200 select-none
+                  ${isSelected
+                                        ? 'bg-purple-500 text-white border-2 border-purple-300 scale-110 z-10 shadow-lg'
+                                        : 'bg-white text-purple-600 border-b-2 border-purple-200 hover:brightness-95 active:translate-y-0.5'
+                                    }
+                  ${block.isRemoving ? 'scale-0 opacity-0 duration-300' : ''}
+                  ${isProcessing || gameOver ? 'cursor-not-allowed' : 'cursor-pointer'}
+                `}
+                            >
+                                {block.value}
+                            </button>
+                        );
+                    })}
+                </div>
+
+                {/* 안내 메시지 */}
+                <div className="text-center text-sm text-white/80">
+                    블록을 터치하여 합을 <span className="font-bold text-yellow-300">{TARGET_SUM}</span>으로 만드세요!
+                    {comboChain > 0 && <div className="mt-1 text-orange-300">연속 성공 시 보너스 점수!</div>}
+                </div>
+
+                {/* 게임 종료 버튼 */}
+                <button
+                    onClick={handleGameOver}
+                    className="mt-2 rounded-lg bg-white/20 px-4 py-2 text-sm text-white hover:bg-white/30 transition"
+                >
+                    게임 종료
+                </button>
             </div>
         </GameShell>
     );
